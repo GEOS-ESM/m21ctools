@@ -215,25 +215,33 @@ def process_tar_file_2d3d(tar_file, date_in_tar, target_file_name, var3d_list, v
     return latlon_avg_results, time_coord
 
 
-def parallel_process_files_2d3d(start_date, end_date, var3d_list, var2d_list, skip_times=None, num_workers=30):
+def parallel_process_files_2d3d(start_date, end_date, var3d_list, var2d_list, 
+                                skip_times=None, num_workers=30, force_rerun=False):
     current_date = start_date
     tar_files = []
 
     while current_date <= end_date:
         target_dt = current_date + timedelta(hours=3)
-        if skip_times and np.datetime64(target_dt) in skip_times:
+        target_dt_np = np.datetime64(target_dt)
+
+        should_skip = False
+        if not force_rerun and skip_times and target_dt_np in skip_times:
+            should_skip = True
+        
+        if should_skip:
             current_date += timedelta(hours=6)
             continue
 
+        # If not skipping, prepare for processing
         tar_file_template, target_file_name = get_target_file(current_date)
         tar_file_path = current_date.strftime(tar_file_template)
 
         if not os.path.exists(tar_file_path):
             print(f"Tarball not found: {tar_file_path}")
         else:
+            tar_files.append((tar_file_path, current_date, target_file_name))
             print(f"Processing: {tar_file_path}")
 
-        tar_files.append((tar_file_path, current_date, target_file_name))
         current_date += timedelta(hours=6)
 
 
@@ -368,7 +376,7 @@ def save_to_icechunk(repo, combined_averages, commit_message):
         # Convert DataArray to Dataset (check this)
         if isinstance(data_array, xr.DataArray):
             data_array = data_array.to_dataset(name=var_name)
-        to_icechunk(data_array, session, mode="a")  # or mode="w" to overwrite
+        to_icechunk(data_array, session, mode="a")  # mode="w" to overwrite
 
     session.commit(commit_message)
 
