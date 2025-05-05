@@ -15,7 +15,6 @@ from scipy.interpolate import griddata
 import tarfile
 from datetime import datetime, timedelta
 import multiprocessing
-import icechunk
 from icechunk.xarray import to_icechunk
 import warnings
 import os
@@ -139,26 +138,35 @@ class CubedSphereData:
 
 # === Ensemble Monitoring & Icechunk Integration ===
 
+import m21ctools.config as cfg
+
 def get_target_file(date_in_tar):
 
     #For now DO include spinup year  
     year = date_in_tar.year
-    if year < 2007 :
-        strm = 'm21c_ens_strm1'
-        expid = 'e5303_m21c_jan98'
+    exp_details = None
+ 
+    if year < 2007:
+        exp_details = cfg.EXPERIMENT_CONFIG['pre_2007']
     elif year >= 2007 and year < 2017:
-        strm = 'm21c_ens_strm2'
-        expid = 'e5303_m21c_jan08'
-    else:
-        strm = 'm21c_ens_strm3'
-        expid = 'e5303_m21c_jan18'
+        exp_details = cfg.EXPERIMENT_CONFIG['2007_to_2016']
+    else: # year >= 2017
+        exp_details = cfg.EXPERIMENT_CONFIG['2017_onward']
     
+    if exp_details is None:
+         raise ValueError(f"No experiment config found for year {year}")
+
+    expid = exp_details['expid']
+    strm = exp_details['strm']
+
     # Files 
     var_file_prefix = f"{expid}.bkg.eta"
     tar_file_prefix = f"{expid}.atmens_stat"
     
-    tar_file_template = f"../data/{strm}/Y%Y/M%m/{tar_file_prefix}.%Y%m%d_%Hz.tar"
-    
+    # tar_file_template = f"../data/{strm}/Y%Y/M%m/{tar_file_prefix}.%Y%m%d_%Hz.tar"
+    # for testing with mock data
+    tar_file_template = f"../mock_data/{strm}/Y%Y/M%m/{tar_file_prefix}.%Y%m%d_%Hz.tar"
+
     parentdir = date_in_tar.strftime(f"{tar_file_prefix}.%Y%m%d_%Hz")
 
     target_datetime = date_in_tar + timedelta(hours=3)
@@ -167,8 +175,8 @@ def get_target_file(date_in_tar):
     return tar_file_template, target_file_name
 
 def get_variables():
-    var3d_list = ['tv', 'u', 'v', 'sphu', 'ozone']
-    var2d_list = ['ps'] # Check if ts can be added here.
+    var3d_list = cfg.DEFAULT_VAR3D # ['tv', 'u', 'v', 'sphu', 'ozone']
+    var2d_list = cfg.DEFAULT_VAR2D # ['ps'] Check if ts can be added here.
 
     return var3d_list, var2d_list
 
@@ -197,7 +205,7 @@ def process_tar_file_2d3d(tar_file, date_in_tar, target_file_name, var3d_list, v
         return None, None
 
     latlon_avg_results = {}  # Dictionary to hold results for each variable
-    time_coord = ds['time'].values[0]  # Get the time coordinate (assumes 'time' dimension is present)
+    time_coord = ds['time'].values[0]
     # Process 3D variables: Average over latitude and longitude
     for var in var3d_list:
         if var in ds:
