@@ -1,3 +1,6 @@
+import logging
+from datetime import datetime
+
 EXPERIMENT_CONFIG = {
     'pre_2007': {
         'expid': 'e5303_m21c_jan98',
@@ -21,3 +24,11 @@ DEFAULT_VAR2D = ['ps']
 
 BASE_INPUT_PATH = "../data"
 BASE_OUTPUT_PLOT_PATH = "../plots"
+
+# Logging Configuration
+LOG_DIR = "../logs"
+LOG_FILENAME_BASE = f'ensemble_processing_{datetime.now().strftime("%Y%m%d")}'
+LOG_FILE_EXTENSION = ".log"
+LOG_LEVEL = logging.INFO 
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+LOG_NAN_WARNINGS = True

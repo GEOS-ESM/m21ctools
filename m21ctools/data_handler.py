@@ -18,8 +18,52 @@ import multiprocessing
 from icechunk.xarray import to_icechunk
 import warnings
 import os
+import logging
+import m21ctools.config as cfg
+
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
+_logger_configured = False
+
+def setup_logging(log_filename=None):
+    global _logger_configured
+    if _logger_configured:
+        logger.debug("Logger already configured.")
+        return logger 
+
+    if log_filename is None:
+        log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), cfg.LOG_DIR))
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%H%M%S")
+        log_filename = os.path.join(log_dir, f"{cfg.LOG_FILENAME_BASE}_{timestamp}{cfg.LOG_FILE_EXTENSION}")
+
+    print(f"Data Handler: Setting up logging to file: {log_filename}")
+
+    logger.setLevel(cfg.LOG_LEVEL)
+    logger.propagate = False
+
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+    file_handler = logging.FileHandler(log_filename, mode='w')
+    formatter = logging.Formatter(cfg.LOG_FORMAT)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(cfg.LOG_LEVEL)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    _logger_configured = True
+    logger.info(f"--- Logging initiated for m21ctools.data_handler ---")
+    return logger
+
+logger = setup_logging()
+
 
 class CubedSphereData:
     def __init__(self, file_path, time=0, lev=0, variable="QV", resolution=1.0):
@@ -183,16 +227,25 @@ def get_variables():
 
 """Open NetCDF file from tarball using Dask"""
 def read_netcdf_from_tar_dask(tar_file, date_in_tar, target_file_name):
-    with tarfile.open(tar_file, 'r') as tar:
-        if target_file_name in tar.getnames():
-            tar_file = tar.extractfile(target_file_name)
-            if tar_file is None:
-                return None
+    try:
+        with tarfile.open(tar_file, 'r') as tar:
+            if target_file_name in tar.getnames():
+                tar_file = tar.extractfile(target_file_name)
+                if tar_file is None:
+                    return None
 
-            ds = xr.open_dataset(tar_file, chunks={"time": 1})
-            ds.load()  # Force load while tar is open
-            return ds
-        return None
+                ds = xr.open_dataset(tar_file, chunks={"time": 1})
+                ds.load()  # Force load while tar is open
+                return ds
+            else:
+                logger.warning(f"Target NetCDF '{target_file_name}' not found inside tarball '{os.path.basename(tar_file)}'.")
+                return None
+    except tarfile.ReadError:
+         logger.error(f"Failed to read tar file (corrupt/empty?): {tar_file}")
+         return None
+    except Exception as e:
+         logger.error(f"Error reading NetCDF from tar '{os.path.basename(tar_file)}': {e}", exc_info=True)
+         return None
 
 
 def process_tar_file_2d3d(tar_file, date_in_tar, target_file_name, var3d_list, var2d_list):

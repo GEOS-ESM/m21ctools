@@ -7,3 +7,4 @@ data
 __pycache__
 test_ensemble_store_integration
 *.png
+/logs
