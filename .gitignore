@@ -5,3 +5,5 @@ ensemble_store
 mock_data
 data
 __pycache__
+test_ensemble_store_integration
+logs
