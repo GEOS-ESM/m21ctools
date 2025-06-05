@@ -15,12 +15,55 @@ from scipy.interpolate import griddata
 import tarfile
 from datetime import datetime, timedelta
 import multiprocessing
-import icechunk
 from icechunk.xarray import to_icechunk
 import warnings
 import os
+import logging
+import m21ctools.config as cfg
+
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
+_logger_configured = False
+
+def setup_logging(log_filename=None):
+    global _logger_configured
+    if _logger_configured:
+        logger.debug("Logger already configured.")
+        return logger 
+
+    if log_filename is None:
+        log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), cfg.LOG_DIR))
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%H%M%S")
+        log_filename = os.path.join(log_dir, f"{cfg.LOG_FILENAME_BASE}_{timestamp}{cfg.LOG_FILE_EXTENSION}")
+
+    print(f"Data Handler: Setting up logging to file: {log_filename}")
+
+    logger.setLevel(cfg.LOG_LEVEL)
+    logger.propagate = False
+
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
+
+    file_handler = logging.FileHandler(log_filename, mode='w')
+    formatter = logging.Formatter(cfg.LOG_FORMAT)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(cfg.LOG_LEVEL)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    _logger_configured = True
+    logger.info(f"--- Logging initiated for m21ctools.data_handler ---")
+    return logger
+
+logger = setup_logging()
+
 
 class CubedSphereData:
     def __init__(self, file_path, time=0, lev=0, variable="QV", resolution=1.0):
@@ -144,26 +187,35 @@ class CubedSphereData:
 
 # === Ensemble Monitoring & Icechunk Integration ===
 
+import m21ctools.config as cfg
+
 def get_target_file(date_in_tar):
 
     #For now DO include spinup year  
     year = date_in_tar.year
-    if year < 2007 :
-        strm = 'm21c_ens_strm1'
-        expid = 'e5303_m21c_jan98'
+    exp_details = None
+ 
+    if year < 2007:
+        exp_details = cfg.EXPERIMENT_CONFIG['pre_2007']
     elif year >= 2007 and year < 2017:
-        strm = 'm21c_ens_strm2'
-        expid = 'e5303_m21c_jan08'
-    else:
-        strm = 'm21c_ens_strm3'
-        expid = 'e5303_m21c_jan18'
+        exp_details = cfg.EXPERIMENT_CONFIG['2007_to_2016']
+    else: # year >= 2017
+        exp_details = cfg.EXPERIMENT_CONFIG['2017_onward']
     
+    if exp_details is None:
+         raise ValueError(f"No experiment config found for year {year}")
+
+    expid = exp_details['expid']
+    strm = exp_details['strm']
+
     # Files 
     var_file_prefix = f"{expid}.bkg.eta"
     tar_file_prefix = f"{expid}.atmens_stat"
     
-    tar_file_template = f"../data/{strm}/Y%Y/M%m/{tar_file_prefix}.%Y%m%d_%Hz.tar"
-    
+    # tar_file_template = f"../data/{strm}/Y%Y/M%m/{tar_file_prefix}.%Y%m%d_%Hz.tar"
+    # for testing with mock data
+    tar_file_template = f"../mock_data/{strm}/Y%Y/M%m/{tar_file_prefix}.%Y%m%d_%Hz.tar"
+
     parentdir = date_in_tar.strftime(f"{tar_file_prefix}.%Y%m%d_%Hz")
 
     target_datetime = date_in_tar + timedelta(hours=3)
@@ -172,24 +224,33 @@ def get_target_file(date_in_tar):
     return tar_file_template, target_file_name
 
 def get_variables():
-    var3d_list = ['tv', 'u', 'v', 'sphu', 'ozone']
-    var2d_list = ['ps'] # Check if ts can be added here.
+    var3d_list = cfg.DEFAULT_VAR3D # ['tv', 'u', 'v', 'sphu', 'ozone']
+    var2d_list = cfg.DEFAULT_VAR2D # ['ps'] Check if ts can be added here.
 
     return var3d_list, var2d_list
 
 
 """Open NetCDF file from tarball using Dask"""
 def read_netcdf_from_tar_dask(tar_file, date_in_tar, target_file_name):
-    with tarfile.open(tar_file, 'r') as tar:
-        if target_file_name in tar.getnames():
-            tar_file = tar.extractfile(target_file_name)
-            if tar_file is None:
-                return None
+    try:
+        with tarfile.open(tar_file, 'r') as tar:
+            if target_file_name in tar.getnames():
+                tar_file = tar.extractfile(target_file_name)
+                if tar_file is None:
+                    return None
 
-            ds = xr.open_dataset(tar_file, chunks={"time": 1})
-            ds.load()  # Force load while tar is open
-            return ds
-        return None
+                ds = xr.open_dataset(tar_file, chunks={"time": 1})
+                ds.load()  # Force load while tar is open
+                return ds
+            else:
+                logger.warning(f"Target NetCDF '{target_file_name}' not found inside tarball '{os.path.basename(tar_file)}'.")
+                return None
+    except tarfile.ReadError:
+         logger.error(f"Failed to read tar file (corrupt/empty?): {tar_file}")
+         return None
+    except Exception as e:
+         logger.error(f"Error reading NetCDF from tar '{os.path.basename(tar_file)}': {e}", exc_info=True)
+         return None
 
 
 def process_tar_file_2d3d(tar_file, date_in_tar, target_file_name, var3d_list, var2d_list):
@@ -202,7 +263,7 @@ def process_tar_file_2d3d(tar_file, date_in_tar, target_file_name, var3d_list, v
         return None, None
 
     latlon_avg_results = {}  # Dictionary to hold results for each variable
-    time_coord = ds['time'].values[0]  # Get the time coordinate (assumes 'time' dimension is present)
+    time_coord = ds['time'].values[0]
     # Process 3D variables: Average over latitude and longitude
     for var in var3d_list:
         if var in ds:
@@ -220,25 +281,33 @@ def process_tar_file_2d3d(tar_file, date_in_tar, target_file_name, var3d_list, v
     return latlon_avg_results, time_coord
 
 
-def parallel_process_files_2d3d(start_date, end_date, var3d_list, var2d_list, skip_times=None, num_workers=30):
+def parallel_process_files_2d3d(start_date, end_date, var3d_list, var2d_list, 
+                                skip_times=None, num_workers=30, force_rerun=False):
     current_date = start_date
     tar_files = []
 
     while current_date <= end_date:
         target_dt = current_date + timedelta(hours=3)
-        if skip_times and np.datetime64(target_dt) in skip_times:
+        target_dt_np = np.datetime64(target_dt)
+
+        should_skip = False
+        if not force_rerun and skip_times and target_dt_np in skip_times:
+            should_skip = True
+        
+        if should_skip:
             current_date += timedelta(hours=6)
             continue
 
+        # If not skipping, prepare for processing
         tar_file_template, target_file_name = get_target_file(current_date)
         tar_file_path = current_date.strftime(tar_file_template)
 
         if not os.path.exists(tar_file_path):
             print(f"Tarball not found: {tar_file_path}")
         else:
+            tar_files.append((tar_file_path, current_date, target_file_name))
             print(f"Processing: {tar_file_path}")
 
-        tar_files.append((tar_file_path, current_date, target_file_name))
         current_date += timedelta(hours=6)
 
 
@@ -373,7 +442,7 @@ def save_to_icechunk(repo, combined_averages, commit_message):
         # Convert DataArray to Dataset (check this)
         if isinstance(data_array, xr.DataArray):
             data_array = data_array.to_dataset(name=var_name)
-        to_icechunk(data_array, session, mode="a")  # or mode="w" to overwrite
+        to_icechunk(data_array, session, mode="a")  # mode="w" to overwrite
 
     session.commit(commit_message)
 

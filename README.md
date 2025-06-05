@@ -28,13 +28,17 @@
 
 ### Ensemble Spread Analysis
 - **Efficient Processing:**  
-  Process ensemble spread data from tar archives with parallel processing support.
-- **Version Control:**  
-  Uses icechunk for efficient data versioning and storage.
+  Process ensemble spread data from tar archives with parallel processing support. Reads ensemble data directly from `.tar` archives containing `.nc4` files.
+- **Parallel Processing:**
+  Processes multiple input files efficiently using Python's `multiprocessing`.
+- **Data Version Control (`icechunk`):**
+  Uses `icechunk` for efficient versioning and storage of the processed (e.g., averaged) time-series data. Supports tracking history via commits.
 - **Time Series Analysis:**  
   Track ensemble spread evolution with Hovmöller diagrams for both 2D and 3D variables.
-- **Incremental Updates:**  
-  Smart processing that skips already processed timestamps for efficient updates.
+- **Incremental Updates & Overwriting:**
+  - Smart processing that skips already processed timestamps for efficient updates.
+  - Skips processing for timestamps already present in the `icechunk` repository (based on `get_existing_times`).
+  - Includes a `force_rerun` flag in the `parallel_process_files_2d3d` function to allow users to bypass skipping and force reprocessing for a specific date range (e.g., if input data changed).
 
 ## Usage Example
 
@@ -71,40 +75,46 @@ data_handler.plot_data(lat_grid, lon_grid, data_grid)
 ```python
 from datetime import datetime
 import icechunk
-import m21ctools.data_handler as m21c
+import m21ctools.data_handler as m21c_handler
+import m21ctools.config as cfg
 
 # Define time range and variables
-start_date = datetime(2010, 1, 4, 0)
+start_date = datetime(2010, 1, 4, 0) # Example date range
 end_date = datetime(2010, 1, 5, 0)
-var3d_list = ['u']  # 3D variables
-var2d_list = ['ps']  # 2D variables
+force_reprocess = False # Set to True to force overwrite for this range
+
+
+# Use variables from config or define manually
+var3d_list = cfg.DEFAULT_VAR3D # Example: ['u']
+var2d_list = cfg.DEFAULT_VAR2D # Example: ['ps']
 
 # Initialize icechunk repository
-repo_path = "ensemble_store"
-storage = icechunk.local_filesystem_storage(repo_path)
-repo = icechunk.Repository.open_or_create(storage)
+icechunk_repo_path = "ensemble_store"
+storage = icechunk.local_filesystem_storage(icechunk_repo_path)
+icechunk_repo = icechunk.Repository.open_or_create(storage)
 
 # Get already processed timestamps
-existing_times = m21c.get_existing_times(repo, 'u')
+times_to_skip = m21c_handler.get_existing_times(icechunk_repo, 'u')
 
 # Process new data with parallel processing
-combined_averages = m21c.parallel_process_files_2d3d(
+combined_averages = m21c_handler.parallel_process_files_2d3d(
     start_date, end_date,
     var3d_list, var2d_list,
-    skip_times=existing_times,
-    num_workers=4
+    skip_times=times_to_skip,
+    num_workers=4,
+    force_rerun=force_reprocess
 )
 
 # Save to icechunk repository
-m21c.save_to_icechunk(repo, combined_averages, "Processed new data")
+m21c_handler.save_to_icechunk(icechunk_repo, combined_averages, "Processed new data")
 
 # Load and visualize
-u_data = m21c.load_from_icechunk(repo, 'u')
-ps_data = m21c.load_from_icechunk(repo, 'ps')
+u_data = m21c_handler.load_from_icechunk(icechunk_repo, 'u')
+ps_data = m21c_handler.load_from_icechunk(icechunk_repo, 'ps')
 
 # Create Hovmöller diagrams
-m21c.plot_hovmoeller_3d(u_data, var='u')  # For 3D variables
-m21c.plot_hovmoeller_2d(ps_data, var='ps')  # For 2D variables
+m21c_handler.plot_hovmoeller_3d(u_data, var='u')  # For 3D variables
+m21c_handler.plot_hovmoeller_2d(ps_data, var='ps')  # For 2D variables
 ```
 
 For more examples, check the `examples/` directory in the repository.

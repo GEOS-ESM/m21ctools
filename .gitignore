@@ -6,4 +6,5 @@ mock_data
 data
 __pycache__
 test_ensemble_store_integration
-logs
+*.png
+/logs
